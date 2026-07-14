@@ -1,5 +1,5 @@
 import { useNavigate } from 'react-router-dom'
-import { Pill, Syringe, GlassWater } from 'lucide-react'
+import { Pill, Syringe } from 'lucide-react'
 
 type NavType = 'feeding' | 'diaper'
 

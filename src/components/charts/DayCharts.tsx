@@ -39,10 +39,6 @@ function feedingKey(f: Feeding): string {
 	return '双侧'
 }
 
-// breast_bottle has ml amount but counts as breast (no timer minutes)
-function isBreastType(type: Feeding['type']): boolean {
-	return type === 'breast_left' || type === 'breast_right' || type === 'breast_both' || type === 'breast_bottle'
-}
 
 export default function DayCharts({ feedings, diapers }: { feedings: Feeding[]; diapers: Diaper[] }) {
 	const hourlyData = useMemo(() => {
