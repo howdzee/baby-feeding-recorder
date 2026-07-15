@@ -1,72 +1,68 @@
-# CLAUDE.md This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+# CLAUDE.md
 
-## What This Is
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-A PWA for recording newborn feeding (breast/formula) and diaper events. All data is local only — IndexedDB, no backend, no auth. Mobile-first, built with a "Liquid Design" layout philosophy (clamp() fluid sizing + CSS Container Queries).
+## 这是什么
 
-## Commands
+一个用于记录新生儿吃奶（母乳/瓶喂/奶粉）和排便事件的 PWA。数据存储在通过 REST API 访问的服务端 SQLite 数据库中；所有数据仅存于用户自己的部署环境，不会上传到任何外部服务器。移动优先，采用"液态设计"布局理念（clamp() 流体尺寸 + CSS 容器查询）。
+
+## 常用命令
 
 ```bash
-npm run dev          # Start Vite dev server
-npm run build        # TypeScript check + Vite build (outputs to dist/)
-npm run preview      # Preview production build locally
-npm test             # Run Vitest suite (headless)
-npm run test:watch   # Run Vitest in watch mode
-npm test -- path/to/test.ts  # Run a single test file
+npm run dev           # 启动 Express API 服务器（./data/data.db）+ Vite 开发服务器（/api 代理到后端）
+npm run dev:client    # 仅 Vite（代理仍指向 localhost:3000）
+npm run dev:server    # 仅 Express 服务器
+npm run build         # TypeScript 类型检查 + Vite 构建 → dist/ 目录
+npm run preview       # 通过 Express 运行 dist/（同时启动 API，模拟生产环境）
+npm test              # 运行 Vitest（无头模式，jsdom + fake-indexeddb）
+npm run test:watch    # Vitest 监听模式
+npm test -- path/to/test.ts    # 运行单个测试文件
 ```
 
-Vitest uses `jsdom` + `fake-indexeddb` for test environment. Db tests use `beforeEach`/`afterEach` calling `resetDB()` from `src/db/index.ts` to clear IndexedDB between tests.
+Vitest 配置位于 `vitest.config.ts`。测试中导入 `resetDB` 时使用 `../db`（即 `src/db/index.ts` 的 barrel 导出）。`data/data.db` 已被 gitignore；部署时通过命名 volume 挂载。
 
-## Architecture
+## 架构
 
-### Data flow
+### 全栈、服务端 SQLite
 
-Pages → Zustand store (`src/store/useRecords.ts`) → Native IndexedDB wrapper (`src/db/index.ts`)
+应用运行一个 Express 服务器（`server.js`），同时提供静态 SPA 资源和基于 `better-sqlite3` 的 JSON API。前端从不直接操作 IndexedDB —— 所有增删改查均通过 `/api/*` 端点完成。`docker-compose.yml` 和 `Dockerfile` 负责部署；数据库通过命名 volume 持久化。
 
-The store is a thin pass-through: it forwards CRUD calls to the db module and exposes a `getDailyRecords(start, end)` method that returns feedings + diapers for a date range. There is no client-side state in the store beyond that.
+```
+Browser → /api/* (Express + better-sqlite3) → data/data.db
+开发：Vite proxy → localhost:3000（可用 VITE_API_BASE 环境变量覆盖）
+生产：同源（Express 同时服务 dist/ + API）
+```
 
-### Database layer
+### 数据流
 
-`src/db/index.ts` uses **native IndexedDB** (IDBDatabase / IDBTransaction / IDBObjectStore), not Dexie — despite the design doc mentioning Dexie. Each function opens the DB, executes the operation, and closes it in a `try/finally`. Two object stores: `feeding` (indexed by `startedAt`) and `diaper` (indexed by `recordedAt`). IDs are `crypto.randomUUID()`. Dates are stored as numeric timestamps.
+页面 → Zustand store（`src/store/useRecords.ts`） → `src/db/remoteApi.ts` → `fetch('/api/...')` → Express → SQLite
 
-### State management
+- **Zustand store** 是一个极薄的透传层：将 `remoteApi.ts` 的函数包装为 Promise，自身不持有任何客户端状态。
+- **`remoteApi.ts`** 构造 fetch 请求：日期序列化为数字时间戳，返回的 JSON 通过 `toFeeding` / `toDiaper` 映射函数回填为类型化的 `Feeding` / `Diaper` 对象。
+- **`store/index.ts`**（即 `config/routes.ts`）也承载了 Express API 端点的主体逻辑，是查阅 SQL 查询、INSERT … ON CONFLICT  upsert 和 WAL 模式配置的参考位置。
 
-Zustand store (`src/store/useRecords.ts`) holds no derived UI state — just async action wrappers. Pages manage their own local state (selected date, form fields, etc.) and call store methods.
+### 类型定义（`src/types.ts`）
 
-### Custom hooks
+- `FeedingType`：`'breast_left' | 'breast_right' | 'breast_both' | 'breast_bottle' | 'formula'`
+- `DiaperType`：`'pee' | 'poop' | 'both'`
+- `Feeding` 中 `amount` 在母乳类型时为 `null`；`durationSec` 在配方奶粉时为 `null`。
+- `Diaper` 包含可选的 `color`、`consistency` 和 `hadRash`。
 
-`src/hooks/useTimer.ts` — count-up timer using `setInterval` for the breastfeeding timer. Returns `{ elapsedSec, isRunning, start, stop, reset }`.
+### 路由（`src/App.tsx`）
 
-### Routing
+五个路由：`/`（首页）、`/add`（新增记录，读取 query 参数 `?type=feeding|diaper`）、`/history`、`/stats`、`/settings`。
 
-`src/App.tsx` defines four routes: `/` (Home), `/add?type=feeding|diaper`, `/history`, `/stats`. The `AddRecord` page reads the `type` query param to decide which form to render.
+### 设计系统
 
-### Liquid Design
+- **液态设计令牌**（`src/index.css`）：使用 `clamp()` 和 `cqi`（容器内联尺寸单位）的 CSS 自定义属性。填充/尺寸令牌以 Tailwind 风格的 utility class 暴露（`.p-fluid-c`、`.text-fluid-xs` 等）。
+- **Tailwind 配置**（`tailwind.config.ts`）扩展了调色板：`coral`（主色/喂养操作）、`mint`（辅助色/排便操作）、`warm-*` 背景色、`ink-900`/`ink-600` 文字色、`warn` 用于危险操作（删除等）。
+- **容器查询**：组件使用 `container-type: inline-size` 实现响应式布局，无需媒体查询。
 
-Custom Tailwind font-size utilities (`text-fluid-xs` through `text-fluid-2xl`) use `clamp()`. Components use `container-type: inline-size` with Container Queries for responsive layout without media queries. CSS custom properties in `:root` define `--btn-min`, `--btn-h`, `--card-p` etc.
+### 重要细节
 
-### Color palette (Tailwind config)
-
-- `coral` (#FF8FA3) — primary, feeding actions
-- `mint` (#7DD3C0) — secondary, diaper actions
-- `warm-50/100/200` — backgrounds
-- `ink-900` (#2D2D2D) / `ink-600` (#888) — text
-- `warn` (#FFB74D) — warnings/delete
-
-## Key Types (`src/types.ts`)
-
-`FeedingType`: `'breast_left' | 'breast_right' | 'breast_both' | 'formula'`
-`DiaperType`: `'pee' | 'poop' | 'both'`
-`Feeding` has `amount` (null for breast) and `durationSec` (null for formula). `Diaper` has optional `color`, `consistency`, and `hadRash`.
-
-## Current Implementation Status (Phase 1, in progress)
-
-Completed: db layer, Zustand store, useTimer hook, AddRecord page, History page, shared components (DateSelector, QuickActions, RecordCard, StatCard), App routing.
-Not yet implemented: Home page, Stats page, PWA icons, `public/manifest.json`.
-
-## Important Notes
-
-- The design doc (`docs/superpowers/specs/`) describes Dexie and a plan file describes TDD task-by-task implementation, but the **actual code uses native IndexedDB**, not Dexie. Follow the implementation, not the plan.
-- Tests import `resetDB` from `../db` (barrel re-export), not `../db/index`.
-- All date boundaries in queries use midnight-normalized dates; the History page computes `end` as `start + 86400000 - 1`.
-- `fake-indexeddb` polyfill is loaded via vitest config (not shown in source), so tests don't need explicit setup.
+- ID 为 `crypto.randomUUID()`，在服务端创建时生成。
+- 日期以 `Date.now()` 风格的数字时间戳存储；所有日期边界查询均将日期归一化为目标日的午夜零点。
+- `Stats.test.tsx` 对应用 `Stats.test.ts`。测试使用 `jsdom` + `fake-indexeddb`；`db/index.ts` 中的 `resetDB` 是一个空操作桩函数，用于单元测试中 API 的 teardown。
+- `Settings` 页面使用 `localStorage` 存储偏好设置（键名 `baby-recorder-settings`）——这是数据库之外唯一的客户端持久化状态。
+- `server.js` 的数据目录路径默认为项目根目录下的 `./data/`，可通过环境变量 `DB_PATH` 覆盖。
+- `docs/superpowers/specs/` 中的设计文档引用了 Dexie 和早期规划，均早于当前服务端 SQLite 的实现，不应视为权威参考。
