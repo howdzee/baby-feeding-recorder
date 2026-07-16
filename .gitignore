@@ -10,8 +10,8 @@ server.exe
 data/
 
 # Node
+frontend/dist
 node_modules
-dist
 .vite
 *.log
 .DS_Store
