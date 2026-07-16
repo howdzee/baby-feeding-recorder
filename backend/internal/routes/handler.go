@@ -3,7 +3,7 @@ package routes
 import (
 	"database/sql"
 	"encoding/json"
-"io"
+	"io"
 	"mime"
 	"net/http"
 	"strconv"
@@ -17,6 +17,7 @@ import (
 
 func init() {
 	mime.AddExtensionType(".webmanifest", "application/manifest+json")
+	mime.AddExtensionType(".json", "application/json")
 }
 
 func Register(mux *http.ServeMux, sqlDB *sql.DB) {
@@ -95,13 +96,153 @@ func Register(mux *http.ServeMux, sqlDB *sql.DB) {
 		syncPush(sqlDB, w, r)
 	})
 
-	mux.HandleFunc("GET /api/sync/pull", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+mux.HandleFunc("GET /api/sync/pull", func(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+		return
+	}
+	syncPull(sqlDB, w, r)
+})
+
+mux.HandleFunc("GET /api/export", func(w http.ResponseWriter, r *http.Request) {
+	feedings, err := queries.GetAllFeedings(sqlDB)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	diapers, err := queries.GetDiapersByRange(sqlDB, 0, maxInt64(""))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	data := map[string]interface{}{
+		"feedings": feedings,
+		"diapers":  diapers,
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Disposition", "attachment; filename=baby-recorder-backup.json")
+	_ = json.NewEncoder(w).Encode(data)
+})
+
+mux.HandleFunc("POST /api/import", func(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, http.StatusText(http.StatusMethodNotAllowed), http.StatusMethodNotAllowed)
+		return
+	}
+	tx, err := sqlDB.Begin()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer tx.Rollback()
+
+	var payload struct {
+		Feedings []map[string]interface{} `json:"feedings"`
+		Diapers  []map[string]interface{} `json:"diapers"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	nowMs := time.Now().UnixMilli()
+	count := 0
+
+	for _, f := range payload.Feedings {
+		feed := models.Feeding{Note: getString(f, "note", "")}
+		if t, ok := f["type"].(string); ok {
+			feed.Type = t
+		}
+		if a, ok := f["amount"]; ok && a != nil {
+			feed.Amount = intPtr(int(a.(float64)))
+		}
+		if d, ok := f["durationSec"]; ok && d != nil {
+			feed.DurationSec = intPtr(int(d.(float64)))
+		}
+		if s, ok := f["startedAt"].(float64); ok {
+			feed.StartedAt = int64(s)
+		}
+		if e, ok := f["endedAt"]; ok && e != nil {
+			feed.EndedAt = int64Ptr(int64(e.(float64)))
+		}
+		if c, ok := f["createdAt"].(float64); ok {
+			feed.CreatedAt = int64(c)
+		} else {
+			feed.CreatedAt = nowMs
+		}
+		if u, ok := f["updatedAt"].(float64); ok {
+			feed.UpdatedAt = int64(u)
+		} else {
+			feed.UpdatedAt = nowMs
+		}
+		if i, ok := f["id"].(string); ok && i != "" {
+			feed.ID = i
+		} else {
+			feed.ID = uuid.New().String()
+		}
+		if err := queries.InsertFeeding(tx, &feed); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
-		syncPull(sqlDB, w, r)
-	})
+		count++
+	}
+
+	for _, d := range payload.Diapers {
+		dp := models.DiaperParams{Note: getString(d, "note", "")}
+		if t, ok := d["type"].(string); ok {
+			dp.Type = t
+		}
+		if c, ok := d["color"]; ok && c != nil {
+			v := c.(string)
+			dp.Color = &v
+		}
+		if cs, ok := d["consistency"]; ok && cs != nil {
+			v := cs.(string)
+			dp.Consistency = &v
+		}
+		if h, ok := d["hadRash"]; ok && h != nil {
+			switch v := h.(type) {
+			case bool:
+				if v {
+					dp.HadRash = 1
+				}
+			case float64:
+				if v != 0 {
+					dp.HadRash = 1
+				}
+			}
+		}
+		if ra, ok := d["recordedAt"].(float64); ok {
+			dp.RecordedAt = int64(ra)
+		}
+		if ca, ok := d["createdAt"].(float64); ok {
+			dp.CreatedAt = int64(ca)
+		} else {
+			dp.CreatedAt = nowMs
+		}
+		if ua, ok := d["updatedAt"].(float64); ok {
+			dp.UpdatedAt = int64(ua)
+		} else {
+			dp.UpdatedAt = nowMs
+		}
+		if i, ok := d["id"].(string); ok && i != "" {
+			dp.ID = i
+		} else {
+			dp.ID = uuid.New().String()
+		}
+		if err := queries.InsertDiaper(tx, &dp); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		count++
+	}
+
+	if err := tx.Commit(); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"ok": true, "imported": count})
+})
 
 	mux.HandleFunc("/", serveStaticOrFallback(distFS))
 }

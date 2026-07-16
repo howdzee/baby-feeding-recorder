@@ -276,39 +276,21 @@ export async function importXlsx(arrayBuf: ArrayBuffer): Promise<number> {
 }
 
 export async function exportDB(): Promise<ArrayBuffer> {
-  const [feedings, diapers] = await Promise.all([
-    getFeedingsByDate(new Date(0), new Date()),
-    getDiapersByDate(new Date(0), new Date()),
-  ])
-  const json = JSON.stringify({ feedings, diapers }, null, 2)
-  return new TextEncoder().encode(json).buffer
+  const API_BASE = (import.meta.env.VITE_API_BASE ?? '').replace(/\/+$/, '')
+  const res = await fetch(`${API_BASE}/api/export`)
+  if (!res.ok) throw new Error(`导出失败: ${res.status}`)
+  return await res.arrayBuffer()
 }
 
 export async function importDB(data: ArrayBuffer): Promise<void> {
-  const json = new TextDecoder().decode(data)
-  const parsed = JSON.parse(json) as { feedings: any[]; diapers: any[] }
-  let count = 0
-  for (const r of parsed.feedings ?? []) {
-    await addFeeding({
-      type: r.type,
-      amount: r.amount ?? null,
-      durationSec: r.durationSec ?? null,
-      startedAt: new Date(r.startedAt),
-      endedAt: r.endedAt ? new Date(r.endedAt) : null,
-      note: r.note ?? '',
-    })
-    count++
+  const API_BASE = (import.meta.env.VITE_API_BASE ?? '').replace(/\/+$/, '')
+  const res = await fetch(`${API_BASE}/api/import`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: new TextDecoder().decode(data),
+  })
+  if (!res.ok) {
+    const msg = await res.text().catch(() => '未知错误')
+    throw new Error(`导入失败 (${res.status}): ${msg}`)
   }
-  for (const r of parsed.diapers ?? []) {
-    await addDiaper({
-      type: r.type,
-      color: r.color ?? null,
-      consistency: r.consistency ?? null,
-      hadRash: !!r.hadRash,
-      recordedAt: new Date(r.recordedAt),
-      note: r.note ?? '',
-    })
-    count++
-  }
-  if (count === 0) throw new Error('备份文件中没有可导入的数据')
 }
