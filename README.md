@@ -36,8 +36,8 @@
 1. 将本项目克隆到服务器上（或导航到项目目录）：
 
 ```bash
-git clone https://github.com/HowDzee/baby-eating-recorder.git
-cd baby-eating-recorder
+git clone https://github.com/HowDzee/baby-feeding-recorder.git
+cd baby-feeding-recorder
 ```
 
 2. **一行命令启动**：
@@ -46,9 +46,7 @@ cd baby-eating-recorder
 docker compose up -d
 ```
 
-3. 打开浏览器访问 `http://<服务器IP>:3000`，即可使用。
-
-> 首次访问可能需要等待几秒钟——Docker 正在构建镜像并自动初始化 SQLite 数据库。
+> 首次构建会完成：Node 构建前端 → Go 编译后端 → 生成单文件 Alpine 镜像。速度取决于网络，通常 2-3 分钟。构建完成后打开浏览器访问 `http://<服务器IP>:3000`。
 
 ### 停止与卸载
 
@@ -69,6 +67,8 @@ docker compose down -v
 | `PORT` | HTTP 服务端口 | `3000` |
 | `DB_PATH` | 数据库文件路径（容器内） | `/app/data/data.db` |
 
+> 数据目录挂载在 Docker Named Volume (`db-data`) 中，无需手动管理文件路径。
+
 通过环境变量修改，编辑 `docker-compose.yml`：
 
 ```yaml
@@ -76,10 +76,9 @@ services:
   app:
     build: .
     ports:
-      - "8080:8080" # 映射端口
+      - "8080:3000" # 主机端口:容器端口
     environment:
-      - PORT=8080 # 容器内监听端口
-      - DB_PATH=/app/data/data.db
+      - PORT=3000 # 容器内监听端口
     volumes:
       - db-data:/app/data
     restart: unless-stopped
@@ -134,36 +133,40 @@ https://baby.你的域名.com {
 适合熟悉 Go 环境的用户，或在没有 Docker 的环境中运行：
 
 ```bash
-# 1. 安装依赖
-npm install
+# 1. 安装前端依赖
+cd frontend && npm install
 
 # 2. 构建前端
 npm run build
 
-# 3. 构建 Go 后端（需要 Go 1.23+）
-go build ./cmd/server/
+# 3. 将构建产物复制到 Go 静态文件目录
+cp -r dist/* ../backend/internal/web/dist/
 
-# 4. 启动服务
+# 4. 构建 Go 后端（需要 Go 1.23+）
+cd ../backend && go build -o server ./cmd/server
+
+# 5. 启动服务
 PORT=3000 DB_PATH=./data/data.db ./server
 ```
 
 ### 开发模式
 
 ```bash
-# 终端 1：启动 Go 后端 API 服务器
-go run ./cmd/server/
+# 终端 1：启动 Vite 开发服务器（带热重载）
+cd frontend && npm run dev
 
-# 终端 2：启动 Vite 开发服务器（带热重载）
-npm run dev
+# 终端 2（可选）：如果使用本地 SQLite 模式
+cd backend && go run ./cmd/server
 ```
+
+> 开发模式下前端通过 Vite 代理转发 API 请求，无需单独启动 Go 后端。
 
 | 命令 | 说明 |
 |------|------|
-| `npm run dev` | 启动 Vite 开发服务器（代理到 Go 后端） |
+| `npm run dev` | 启动 Vite 开发服务器（带热重载） |
 | `npm run build` | TypeScript 类型检查 + Vite 构建 |
 | `npm test` | 运行 Vitest |
-| `go run ./cmd/server/` | 启动 Go 后端 API 服务器 |
-| `go build ./cmd/server/` | 编译 Go 后端为二进制 |
+| `go build ./cmd/server` | 编译 Go 后端为二进制 |
 
 ---
 
@@ -178,7 +181,7 @@ npm run dev
 | 图标 | lucide-react |
 | 图表 | Recharts |
 | 导出 | xlsx（SheetJS） |
-| 后端 | Go 1.23 + net/http |
+| 后端 | Go 1.23 + net/http（纯标准库，无第三方框架） |
 | 数据库 | SQLite (modernc.org/sqlite, WAL 模式) |
 | PWA | vite-plugin-pwa（Workbox） |
 | 部署 | Docker + Docker Compose |
