@@ -1,0 +1,90 @@
+name: Release
+
+on:
+  push:
+    tags: [ 'v*' ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-pc-windows-gnu
+            os: windows-latest
+            ext: .exe
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            ext: ''
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            ext: ''
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            ext: ''
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+            ext: ''
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache: true
+
+      - name: Build
+        working-directory: backend
+        run: |
+          go mod download
+          CGO_ENABLED=0 go build -ldflags="-s -w" -o baby-recorder-${{ matrix.target }}${{ matrix.ext }} ./cmd/server
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: baby-recorder-${{ matrix.target }}
+          path: backend/baby-recorder-${{ matrix.target }}${{ matrix.ext }}
+          compression-level: 9
+          overwrite: true
+
+  release:
+    name: Create GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: ./artifacts
+
+      - name: Package artifacts
+        run: |
+          mkdir -p release
+          for dir in artifacts/*/; do
+            dirname=$(basename "$dir")
+            # Zip for Windows (if present), tar.gz for others
+            if ls "$dir"/*.exe 1>/dev/null 2>&1; then
+              (cd "$dir" && zip -r ../../release/${dirname}.zip .)
+            else
+              tar -czf release/${dirname}.tar.gz -C "$dir" .
+            fi
+          done
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release/*
+          generate_release_notes: true
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITH_TOKEN }}
