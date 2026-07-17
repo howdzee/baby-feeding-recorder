@@ -55,6 +55,11 @@ CREATE TABLE IF NOT EXISTS diaper (
 	createdAt INTEGER NOT NULL,
 	updatedAt INTEGER NOT NULL
 );
-CREATE INDEX IF NOT EXISTS idx_f_ts ON feeding(startedAt);
-CREATE INDEX IF NOT EXISTS idx_d_ts ON diaper(recordedAt);
-`
+	CREATE INDEX IF NOT EXISTS idx_f_ts ON feeding(startedAt);
+	CREATE INDEX IF NOT EXISTS idx_d_ts ON diaper(recordedAt);
+	CREATE TABLE IF NOT EXISTS settings (
+		key TEXT PRIMARY KEY,
+		value TEXT NOT NULL,
+		updatedAt INTEGER NOT NULL
+	);
+	`

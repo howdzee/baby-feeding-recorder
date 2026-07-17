@@ -2,8 +2,7 @@ import { useState, useEffect } from 'react'
 import { Bell, Trash2, Download, Upload, Baby, FileSpreadsheet, Table, Database } from 'lucide-react'
 import StatCard from '../components/StatCard'
 import useRecords from '../store/useRecords'
-
-const LS_KEY = 'baby-recorder-settings'
+import { fetchSettings, saveSettingsOnServer } from '../db'
 
 interface AppSettings {
   babyName: string
@@ -14,18 +13,6 @@ interface AppSettings {
   quietEnd: string
 }
 
-function load(): AppSettings {
-  try {
-    const raw = localStorage.getItem(LS_KEY)
-    if (raw) return { ...defaults, ...JSON.parse(raw) }
-  } catch { /* ignore */ }
-  return { ...defaults }
-}
-
-function save(s: AppSettings) {
-  localStorage.setItem(LS_KEY, JSON.stringify(s))
-}
-
 const defaults: AppSettings = {
   babyName: '',
   babyBirthday: '',
@@ -33,6 +20,28 @@ const defaults: AppSettings = {
   reminderInterval: 3,
   quietStart: '22:00',
   quietEnd: '06:00',
+}
+
+function serialize(s: AppSettings): Record<string, string> {
+  return {
+    babyName: s.babyName,
+    babyBirthday: s.babyBirthday,
+    reminderEnabled: String(s.reminderEnabled),
+    reminderInterval: String(s.reminderInterval),
+    quietStart: s.quietStart,
+    quietEnd: s.quietEnd,
+  }
+}
+
+function deserialize(raw: Record<string, string>): AppSettings {
+  return {
+    babyName: raw.babyName ?? defaults.babyName,
+    babyBirthday: raw.babyBirthday ?? defaults.babyBirthday,
+    reminderEnabled: raw.reminderEnabled === 'true',
+    reminderInterval: raw.reminderInterval ? Number(raw.reminderInterval) : defaults.reminderInterval,
+    quietStart: raw.quietStart ?? defaults.quietStart,
+    quietEnd: raw.quietEnd ?? defaults.quietEnd,
+  }
 }
 
 function isQuietHours(s: AppSettings): boolean {
@@ -51,11 +60,33 @@ function isQuietHours(s: AppSettings): boolean {
 
 export default function Settings() {
   const store = useRecords()
-  const [settings, setSettings] = useState<AppSettings>(load)
-  const [confirmClear] = useState(false)
+  const [settings, setSettings] = useState<AppSettings>({ ...defaults })
   const [busy, setBusy] = useState(false)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState(false)
 
-  useEffect(() => { save(settings) }, [settings])
+  // Load settings from server on mount
+  useEffect(() => {
+    (async () => {
+      try {
+        const server = await fetchSettings()
+        if (server && Object.keys(server).length > 0) {
+          setSettings({ ...defaults, ...deserialize(server) })
+        }
+        // If server returns empty, keep defaults — no localStorage fallback
+      } catch {
+        setError(true)
+        setSettings({ ...defaults })
+      }
+      setLoading(false)
+    })()
+  }, [])
+
+  // Save to server on every change (skip initial mount)
+  useEffect(() => {
+    if (loading) return
+    saveSettingsOnServer(serialize(settings)).catch(() => {})
+  }, [settings, loading])
 
   const update = (patch: Partial<AppSettings>) =>
     setSettings((prev) => ({ ...prev, ...patch }))
@@ -73,13 +104,15 @@ export default function Settings() {
       a.download = `baby-recorder-backup-${new Date().toISOString().slice(0,10)}.json`
       a.click()
       URL.revokeObjectURL(url)
-    } finally { setBusy(false) }
+    } finally {
+      setBusy(false)
+    }
   }
 
   const importData = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
-    if (!confirm('恢复数据将替换当前所有记录（设置不受影响）。确定继续？')) {
+    if (!confirm('恢复数据将替换当前所有记录和设置。确定继续？')) {
       e.target.value = ''; return
     }
     setBusy(true)
@@ -93,7 +126,9 @@ export default function Settings() {
           window.location.reload()
         } catch {
           alert('导入失败')
-        } finally { setBusy(false) }
+        } finally {
+          setBusy(false)
+        }
       }
       reader.readAsArrayBuffer(file)
     } catch { setBusy(false) }
@@ -108,7 +143,9 @@ export default function Settings() {
       await doExport()
     } catch {
       alert('导出 Excel 失败')
-    } finally { setBusy(false) }
+    } finally {
+      setBusy(false)
+    }
   }
 
   const importXlsxHandler = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -126,7 +163,9 @@ export default function Settings() {
       window.location.reload()
     } catch {
       alert('导入失败')
-    } finally { setBusy(false) }
+    } finally {
+      setBusy(false)
+    }
     e.target.value = ''
   }
 
@@ -167,11 +206,27 @@ export default function Settings() {
   }, [store])
 
   const handleClearAll = async () => {
-    if (confirmClear) return
+    if (!confirm('清空所有记录和设置，不可恢复。确定继续？')) return
     const { resetDB } = await import('../db')
     await resetDB()
-    localStorage.removeItem(LS_KEY)
     window.location.reload()
+  }
+
+  if (loading) {
+    return (
+      <div className="mx-auto max-w-2xl p-fluid-c">
+        <p className="text-fluid-base text-ink-600">加载设置中...</p>
+      </div>
+    )
+  }
+
+  if (error) {
+    return (
+      <div className="mx-auto max-w-2xl p-fluid-c">
+        <p className="text-fluid-base text-warn">无法连接到服务端，请检查网络连接后刷新页面。</p>
+        <p className="text-fluid-xs text-ink-600 mt-2">设置将使用默认值，连接恢复后会自动同步。</p>
+      </div>
+    )
   }
 
   return (
@@ -247,9 +302,7 @@ export default function Settings() {
                   max={8}
                   value={settings.reminderInterval}
                   onChange={(e) =>
-                    update({
-                      reminderInterval: Math.max(1, Math.min(8, +e.target.value)),
-                    })
+                    update({ reminderInterval: Math.max(1, Math.min(8, +e.target.value)) })
                   }
                   className="mx-1 w-12 rounded border border-gray-300 p-1 text-center text-fluid-base"
                 />
@@ -275,9 +328,9 @@ export default function Settings() {
           <Database className="h-5 w-5 text-coral" />
           数据管理
         </h2>
-      <p className="text-fluid-base text-ink-600 mb-4">
-        所有数据存储在服务端 SQLite 数据库中，仅存于你自己的部署环境。
-      </p>
+        <p className="text-fluid-base text-ink-600 mb-4">
+          所有数据存储在服务端 SQLite 数据库中，仅存于你自己的部署环境。
+        </p>
 
         {/* SQLite backup */}
         <div className="flex flex-col gap-2 mb-3">
@@ -292,10 +345,12 @@ export default function Settings() {
               disabled={busy}
               className="flex items-center gap-1 rounded-full bg-coral px-4 py-2 text-white text-fluid-base disabled:opacity-60"
             >
-              <Download className="h-4 w-4" /> 备份
+              <Download className="h-4 w-4" />
+              备份
             </button>
             <label className="flex items-center gap-1 rounded-full bg-white border border-gray-300 px-4 py-2 text-fluid-base cursor-pointer disabled:opacity-60">
-              <Upload className="h-4 w-4" /> 恢复
+              <Upload className="h-4 w-4" />
+              恢复
               <input type="file" accept=".sqlite,.db,.bin" onChange={importData} disabled={busy} className="hidden" />
             </label>
           </div>
@@ -316,10 +371,12 @@ export default function Settings() {
               disabled={busy}
               className="flex items-center gap-1 rounded-full bg-emerald-500 px-4 py-2 text-white text-fluid-base disabled:opacity-60"
             >
-              <FileSpreadsheet className="h-4 w-4" /> 导出 Excel
+              <FileSpreadsheet className="h-4 w-4" />
+              导出 Excel
             </button>
             <label className="flex items-center gap-1 rounded-full bg-white border border-gray-300 px-4 py-2 text-fluid-base cursor-pointer disabled:opacity-60">
-              <Table className="h-4 w-4" /> 导入 Excel
+              <Table className="h-4 w-4" />
+              导入 Excel
               <input type="file" accept=".xlsx,.xls" onChange={importXlsxHandler} disabled={busy} className="hidden" />
             </label>
           </div>
@@ -337,10 +394,12 @@ export default function Settings() {
               disabled={busy}
               className="flex items-center gap-1 rounded-full bg-coral px-4 py-2 text-white text-fluid-base disabled:opacity-60"
             >
-              <Download className="h-4 w-4" /> 导出设置
+              <Download className="h-4 w-4" />
+              导出设置
             </button>
             <label className="flex items-center gap-1 rounded-full bg-white border border-gray-300 px-4 py-2 text-fluid-base cursor-pointer disabled:opacity-60">
-              <Upload className="h-4 w-4" /> 导入设置
+              <Upload className="h-4 w-4" />
+              导入设置
               <input type="file" accept=".json" onChange={importSettings} disabled={busy} className="hidden" />
             </label>
           </div>
@@ -358,12 +417,10 @@ export default function Settings() {
             type="button"
             onClick={handleClearAll}
             disabled={busy}
-            className={`flex items-center gap-1 rounded-full px-4 py-2 text-fluid-base disabled:opacity-60 ${
-              confirmClear ? 'bg-red-600 text-white' : 'border border-red-300 text-red-500 bg-white'
-            }`}
+            className="flex items-center gap-1 rounded-full border border-red-300 text-red-500 bg-white px-4 py-2 text-fluid-base disabled:opacity-60"
           >
             <Trash2 className="h-4 w-4" />
-            {confirmClear ? '再次确认清空' : '清空所有数据'}
+            清空所有数据
           </button>
         </div>
       </section>
@@ -374,10 +431,7 @@ export default function Settings() {
           <p className="text-fluid-base text-ink-600 mb-2">今日概况</p>
           <div
             className="grid gap-4"
-            style={{
-              gridTemplateColumns:
-                'repeat(auto-fit, minmax(min(100%, 160px), 1fr))',
-            }}
+            style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 160px), 1fr))' }}
           >
             <StatCard title="今天吃奶" value={stats.feedings} unit="次" />
             <StatCard title="今天尿便" value={stats.diapers} unit="次" />

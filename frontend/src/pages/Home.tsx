@@ -5,6 +5,7 @@ import QuickActions from '../components/QuickActions'
 import StatCard from '../components/StatCard'
 import DailyTimeline from '../components/charts/DailyTimeline'
 import useRecords from '../store/useRecords'
+import { fetchSettings } from '../db'
 
 export default function Home() {
   const navigate = useNavigate()
@@ -13,15 +14,14 @@ export default function Home() {
   const [babyName, setBabyName] = useState('')
   const [babyBirthday, setBabyBirthday] = useState('')
 
+  // Load settings from server
   useEffect(() => {
-    try {
-      const raw = localStorage.getItem('baby-recorder-settings')
-      if (raw) {
-        const s = JSON.parse(raw)
+    fetchSettings()
+      .then((s) => {
         if (s.babyName) setBabyName(s.babyName)
         if (s.babyBirthday) setBabyBirthday(s.babyBirthday)
-      }
-    } catch { /* ignore */ }
+      })
+      .catch(() => {})
   }, [])
 
   // Calculate age from birthday
@@ -67,14 +67,14 @@ export default function Home() {
   const diaperCount = (records?.diapers ?? []).length
 
   return (
-<div className="mx-auto max-w-2xl p-fluid-c">
-  <header className="py-fluid-c">
-    <h1 className="text-fluid-2xl font-bold">{greeting} 👋</h1>
-    {ageText && <p className="text-fluid-base text-ink-600 mt-1">{ageText}</p>}
-    {!babyBirthday && babyName && (
-      <p className="text-fluid-sm text-ink-400 mt-1">去设置页添加出生日期可以看到宝宝月龄哦</p>
-    )}
-  </header>
+    <div className="mx-auto max-w-2xl p-fluid-c">
+      <header className="py-fluid-c">
+        <h1 className="text-fluid-2xl font-bold">{greeting} 👋</h1>
+        {ageText && <p className="text-fluid-base text-ink-600 mt-1">{ageText}</p>}
+        {!babyBirthday && babyName && (
+          <p className="text-fluid-sm text-ink-400 mt-1">去设置页添加出生日期可以看到宝宝月龄哦</p>
+        )}
+      </header>
 
       <section style={{ containerType: 'inline-size' }}>
         <QuickActions onNavigate={(t) => navigate(`/add?type=${t}`)} />
@@ -91,24 +91,24 @@ export default function Home() {
 
       <DailyTimeline feedings={records?.feedings ?? []} diapers={records?.diapers ?? []} />
 
-<nav className="mt-8 flex flex-wrap justify-center gap-3">
-  <button
-    type="button"
-    onClick={() => navigate('/history')}
-    className="flex items-center gap-2 rounded-full bg-white px-6 py-3 shadow-sm text-fluid-lg font-semibold active:scale-95"
-  >
-    <ClipboardList className="h-5 w-5" />
-    历史记录
-  </button>
-  <button
-    type="button"
-    onClick={() => navigate('/settings')}
-    className="flex items-center gap-2 rounded-full bg-white px-6 py-3 shadow-sm text-fluid-lg font-semibold active:scale-95"
-  >
-    <Settings className="h-5 w-5" />
-    设置
-  </button>
-</nav>
+      <nav className="mt-8 flex flex-wrap justify-center gap-3">
+        <button
+          type="button"
+          onClick={() => navigate('/history')}
+          className="flex items-center gap-2 rounded-full bg-white px-6 py-3 shadow-sm text-fluid-lg font-semibold active:scale-95"
+        >
+          <ClipboardList className="h-5 w-5" />
+          历史记录
+        </button>
+        <button
+          type="button"
+          onClick={() => navigate('/settings')}
+          className="flex items-center gap-2 rounded-full bg-white px-6 py-3 shadow-sm text-fluid-lg font-semibold active:scale-95"
+        >
+          <Settings className="h-5 w-5" />
+          设置
+        </button>
+      </nav>
     </div>
   )
 }

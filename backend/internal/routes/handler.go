@@ -6,6 +6,7 @@ import (
 	"io"
 	"mime"
 	"net/http"
+	"strings"
 	"strconv"
 	"time"
 
@@ -244,6 +245,44 @@ mux.HandleFunc("POST /api/import", func(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, map[string]interface{}{"ok": true, "imported": count})
 })
 
+	mux.HandleFunc("GET /api/settings", func(w http.ResponseWriter, r *http.Request) {
+		settings, err := queries.GetAllSettings(sqlDB)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if settings == nil {
+			settings = map[string]string{}
+		}
+		writeJSON(w, http.StatusOK, settings)
+	})
+
+	mux.HandleFunc("PUT /api/settings", func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]string
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		n := nowMs()
+		tx, err := sqlDB.Begin()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		defer tx.Rollback()
+		for k, v := range body {
+			if err := queries.SetSetting(tx, k, v, n); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+		}
+		if err := tx.Commit(); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+	})
+
 	mux.HandleFunc("/", serveStaticOrFallback(distFS))
 }
 
@@ -262,14 +301,35 @@ func serveStaticOrFallback(distFS http.FileSystem) func(http.ResponseWriter, *ht
 			defer f.Close()
 			info, statErr := f.Stat()
 			if statErr == nil && !info.IsDir() {
+				// Cache-bust: no-cache for HTML, long cache for hashed assets
+				if requestedPath == "/index.html" || requestedPath == "/manifest.webmanifest" {
+					w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+					w.Header().Set("Pragma", "no-cache")
+					w.Header().Set("Expires", "0")
+				} else if requestedPath == "/registerSW.js" || requestedPath == "/sw.js" || requestedPath == "/workbox-*.js" {
+					w.Header().Set("Cache-Control", "no-cache")
+				} else {
+					w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+				}
 				http.ServeContent(w, r, info.Name(), info.ModTime(), f.(io.ReadSeeker))
 				return
 			}
+		}
+		// Don't fallback to index.html for asset paths — return 404 so the
+		// browser doesn't receive an HTML document when it expects JS/CSS.
+		if strings.HasPrefix(requestedPath, "/assets/") ||
+			strings.HasPrefix(requestedPath, "/sw.") ||
+			strings.HasPrefix(requestedPath, "/workbox-") {
+			http.NotFound(w, r)
+			return
 		}
 		idx, err2 := distFS.Open("/index.html")
 		if err2 == nil {
 			defer idx.Close()
 			info, _ := idx.Stat()
+			w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+			w.Header().Set("Pragma", "no-cache")
+			w.Header().Set("Expires", "0")
 			http.ServeContent(w, r, "index.html", info.ModTime(), idx.(io.ReadSeeker))
 		} else {
 			http.NotFound(w, r)

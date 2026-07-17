@@ -4,9 +4,9 @@ import { Pill, Syringe } from 'lucide-react'
 type NavType = 'feeding' | 'diaper'
 
 export default function QuickActions({
-	onNavigate,
+  onNavigate,
 }: {
-	onNavigate: (type: NavType) => void
+  onNavigate?: (type: NavType) => void
 }) {
 	const navigate = useNavigate()
 
@@ -22,7 +22,7 @@ export default function QuickActions({
 					key={key}
 					type="button"
 					onClick={() => {
-						onNavigate(key)
+						onNavigate?.(key)
 						navigate(`/add?type=${key}`)
 					}}
 					className={`${cls} flex flex-col items-center justify-center rounded-2xl shadow-lg active:scale-95`}
