@@ -195,8 +195,9 @@ Browser → Go (/api/*) → modernc.org/sqlite → data/data.db
 ```
 
 - 所有数据通过 REST API 读写，前端不直接操作数据库
+- 设置（宝宝昵称、出生日期、提醒等）存储在服务端 SQLite，所有设备共享
 - 数据库文件通过 Docker Named Volume 持久化，容器重建/升级数据不丢失
-- 支持时间范围查询、upsert 更新、删除
+- 支持时间范围查询、JSON 备份导入、Excel 导入导出、多设备同步
 
 ### 数据表
 
